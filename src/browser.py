@@ -1,0 +1,271 @@
+import json
+import os
+from playwright.sync_api import sync_playwright, Page, Browser as PWBrowser
+from src.logger import logger
+
+CONFIG_PATH = "config.json"
+
+
+class Browser:
+    def __init__(self, config: dict):
+        self.config = config
+        self._playwright = None
+        self._browser: PWBrowser = None
+        self.page: Page = None
+
+    def _url(self, path: str) -> str:
+        base = self.config["url"].rstrip("/")
+        return f"{base}/{path.lstrip('/')}"
+
+    def _goto(self, path: str):
+        url = self._url(path)
+        logger.debug(f"goto {url}")
+        self.page.goto(url, wait_until="domcontentloaded")
+
+    def _click(self, selector: str):
+        logger.debug(f"click {selector}")
+        self.page.click(selector)
+
+    def _fill(self, selector: str, value: str):
+        logger.debug(f"fill {selector} = {value!r}")
+        self.page.fill(selector, value)
+
+    def _select(self, selector: str, **kwargs):
+        label = kwargs.get("label", kwargs.get("value", ""))
+        logger.debug(f"select {selector} = {label!r}")
+        self.page.select_option(selector, **kwargs)
+
+    def _radio(self, name: str, label: str):
+        logger.debug(f"radio {name} = {label!r}")
+
+    def login(self):
+        self._playwright = sync_playwright().start()
+        is_debug = self.config.get("debug", 1) == 1
+        self._browser = self._playwright.chromium.launch(headless=not is_debug)
+        self.page = self._browser.new_page(ignore_https_errors=True)
+
+        logger.info("正在開啟上稿系統...")
+        logger.debug(f"goto {self.config['url']}")
+        self.page.goto(self.config["url"], wait_until="domcontentloaded")
+
+        while True:
+            self._fill_login_form()
+            self.page.wait_for_function(
+                "() => window.location.href.includes('/Home/Index') || "
+                "document.querySelector('.alertify-log') !== null",
+                timeout=15000,
+            )
+
+            if "/Home/Index" in self.page.url:
+                logger.info("登入成功\n")
+                return
+            else:
+                logger.info("[錯誤] 登入失敗，帳號或密碼不正確。\n")
+                self._prompt_new_credentials()
+                logger.debug(f"goto {self.config['url']}")
+                self.page.goto(self.config["url"], wait_until="domcontentloaded")
+
+    def _fill_login_form(self):
+        self.page.wait_for_selector("input[name='UserCode']")
+        logger.debug(f"fill UserCode = {self.config['username']!r}")
+        self.page.fill("input[name='UserCode']", self.config["username"])
+        logger.debug("fill Password = ********")
+        self.page.fill("input[name='Password']", self.config["password"])
+        logger.debug("press Enter")
+        self.page.keyboard.press("Enter")
+
+    def _prompt_new_credentials(self):
+        logger.info("請重新輸入帳號密碼：")
+        self.config["username"] = input("帳號：").strip()
+        self.config["password"] = input("密碼：").strip()
+        with open(CONFIG_PATH, "w", encoding="utf-8") as f:
+            json.dump(self.config, f, ensure_ascii=False, indent=2)
+        logger.info("已更新設定\n")
+
+    def verify_magazine(self, issue: str) -> bool:
+        logger.info(f"驗證期數 {issue}...")
+        self._goto("Magazine/Index")
+        self.page.wait_for_selector("#SearchVol")
+        self._fill("#SearchVol", issue)
+        self._select("#MagazineCategoryId", value="f72fff3a-b774-454a-8b5a-870a114dc675")
+        self._click("#search_btn")
+        self.page.wait_for_selector("p.count")
+
+        count_text = self.page.locator("p.count i").first.inner_text().strip()
+        logger.debug(f"搜尋結果筆數：{count_text}")
+
+        if count_text == "0":
+            logger.info(f"[錯誤] 查無期數 {issue}，請至 CMS 雜誌管理新增後再執行。\n")
+            return False
+
+        logger.info(f"期數 {issue} 驗證成功\n")
+        return True
+
+    def get_gallery_credentials(self) -> tuple:
+        """前往 Gallery/Index，取得 site_id 和 cookies 供並行上傳使用。"""
+        self._goto("Gallery/Index")
+        site_id = self.page.locator("#NowWebSiteId").input_value()
+        cookies = {c["name"]: c["value"] for c in self.page.context.cookies()}
+        logger.debug(f"NowWebSiteId = {site_id}")
+        return site_id, cookies
+
+    def post_image_file(self, img_path: str, site_id: str, cookies: dict) -> str:
+        """
+        只做 POST 上傳，回傳 ImgName。可並行呼叫。
+        """
+        import requests
+        import uuid
+        import urllib3
+        urllib3.disable_warnings()
+
+        filename = os.path.basename(img_path)
+        ext = os.path.splitext(img_path)[1].lower()
+        guid_filename = str(uuid.uuid4()) + ext
+        mime = "image/jpeg" if ext in (".jpg", ".jpeg") else "image/png"
+
+        logger.debug(f"POST Gallery/Create filename={guid_filename} ({filename})")
+        with open(img_path, "rb") as f:
+            resp = requests.post(
+                self._url("Gallery/Create"),
+                cookies=cookies,
+                files={"FileUpload": (guid_filename, f, mime)},
+                data={"NowWebSiteId": site_id},
+                verify=False,
+            )
+
+        resp_data = resp.json()
+        logger.debug(f"Gallery/Create 回應：{resp_data}")
+
+        if not resp_data.get("isUploaded"):
+            raise Exception(f"圖片上傳失敗：{resp_data.get('ErrorLog')} ({filename})")
+
+        return resp_data["ImgName"]
+
+    def fill_image_row(self, img_name: str, title: str, desc: str, author_label: str, author_value: str) -> tuple:
+        """
+        在 Gallery 頁面找到 img_name 對應的列（含翻頁），填入資料後儲存，回傳 (cms_id, img_url)。
+        """
+        row = self._find_gallery_row(img_name)
+
+        if title:
+            logger.debug(f"fill .Title = {title!r}")
+            row.locator(".Title").fill(title)
+        if desc:
+            logger.debug(f"fill .Description = {desc!r}")
+            row.locator(".Description").fill(desc)
+        if author_label:
+            logger.debug(f"select .AuthorType = {author_label!r}")
+            row.locator(".AuthorType").select_option(label=author_label.strip())
+        if author_value:
+            logger.debug(f"fill .Author = {author_value!r}")
+            row.locator(".Author").fill(author_value)
+
+        cms_id = row.locator(".SourceId").input_value()
+        img_url = row.locator("img").get_attribute("src")
+
+        logger.debug(f"click .btn_Store")
+        self.page.locator("a.icon_btn.btn_Store").click()
+        logger.debug(f"圖片儲存完成 SourceId={cms_id} ImgName={img_name}")
+
+        return cms_id, img_url
+
+    def _find_gallery_row(self, img_name: str):
+        """在 Gallery/Index 翻頁尋找 img_name 對應的列。"""
+        while True:
+            rows = self.page.locator(f'.box.Datarow:has(img[src$="{img_name}"])')
+            if rows.count() > 0:
+                return rows.first
+
+            # 嘗試翻下一頁
+            next_btn = self.page.locator("a.arrow_btn.right")
+            if next_btn.is_disabled() or not next_btn.is_visible():
+                raise Exception(f"找不到圖片列：{img_name}")
+
+            logger.debug(f"翻頁尋找 {img_name}")
+            next_btn.click()
+            self.page.wait_for_load_state("domcontentloaded")
+
+    def upload_box(self, title: str, content_html: str) -> str:
+        logger.debug(f"上傳BOX：{title!r}")
+        self._goto("Box/Index")
+        self._click("#btn_Add")
+        self.page.wait_for_load_state("domcontentloaded")
+
+        guid = self.page.url.rstrip("/").split("/")[-1]
+        logger.debug(f"BOX GUID = {guid}")
+
+        self._fill("#BoxName", title)
+        logger.debug(f"evaluate Content (長度 {len(content_html)})")
+        self.page.evaluate(f'document.getElementById("Content").value = {json.dumps(content_html)}')
+
+        self._click("a.submit_btn.gray")
+        self.page.wait_for_load_state("domcontentloaded")
+
+        self._goto(f"Box/Edit/{guid}")
+        cms_id = self.page.locator(".row:has(label[for='SourceId'])").inner_text()
+        cms_id = cms_id.replace("序號代碼", "").strip()
+        logger.debug(f"BOX 儲存完成 SourceId={cms_id}")
+
+        return cms_id
+
+    def create_article(self, field: dict, issue: str, content_html: str, channel: str) -> str:
+        logger.debug(f"建立文章：{field.get('Title', '')!r}")
+        self._goto("CTMagazine/Index")
+        self._click("#btn_Add")
+        self.page.wait_for_load_state("domcontentloaded")
+
+        guid = self.page.url.rstrip("/").split("/")[-1]
+        logger.debug(f"文章 GUID = {guid}")
+
+        self._select("#MagazineMainCategoryId", label=field.get("MagazineMainCategoryId", ""))
+        self.page.wait_for_function("() => document.querySelector('#MagazineId') && document.querySelector('#MagazineId').options.length > 1")
+        self.page.wait_for_function("() => document.querySelector('#MagazineCategory_0') && document.querySelector('#MagazineCategory_0').options.length > 1")
+
+        self._select("#MagazineId", label=issue)
+        self._fill("#ArticleNo_Page", field.get("ArticleNo_Page", ""))
+
+        category_1 = field.get("MagazineCategory_1", "")
+        if category_1:
+            self._select("#MagazineCategory_0", label=category_1)
+            self.page.wait_for_function("() => document.querySelector('#MagazineCategory_1') && document.querySelector('#MagazineCategory_1').options.length > 1")
+
+        category_0 = field.get("MagazineCategory_0", "")
+        if category_0:
+            self._select("#MagazineCategory_0", label=category_0)
+
+        for field_id in ["Title", "SubTitle", "Producer", "Author", "Classfieder",
+                         "Interviewer", "Researcher", "Translator"]:
+            val = field.get(field_id, "")
+            if val:
+                self._fill(f"#{field_id}", val)
+
+        channel_label = field.get("ChannelId", channel)
+        self._radio("ChannelId", channel_label)
+        radio = self.page.locator("label").filter(
+            has=self.page.locator(f"span:text('{channel_label}')")
+        ).locator("input[name='ChannelId']").first
+        if not radio.is_checked():
+            radio.check()
+
+        logger.debug(f"evaluate Content (長度 {len(content_html)})")
+        self.page.evaluate(f'document.getElementById("Content").value = {json.dumps(content_html)}')
+
+        self._click("a.submit_btn.gray")
+        self.page.wait_for_load_state("domcontentloaded")
+
+        self._goto(f"CTMagazine/Edit/{guid}")
+        cms_id = self.page.locator(".row:has(label:text('序號代碼'))").inner_text()
+        cms_id = cms_id.replace("序號代碼", "").strip()
+        logger.debug(f"文章儲存完成 SourceId={cms_id} GUID={guid}")
+
+        return guid
+
+    def wait_for_ajax(self, selector: str, timeout: int = 10000):
+        logger.debug(f"wait_for_selector {selector}")
+        self.page.wait_for_selector(selector, timeout=timeout)
+
+    def close(self):
+        if self._browser:
+            self._browser.close()
+        if self._playwright:
+            self._playwright.stop()
