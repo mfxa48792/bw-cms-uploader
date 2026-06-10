@@ -1,4 +1,3 @@
-import json
 import os
 import shutil
 import sys
@@ -8,7 +7,9 @@ import urllib.request
 import zipfile
 
 VERSION_FILE = "VERSION"
-RELEASES_API = "https://api.github.com/repos/mfxa48792/bw-cms-uploader/releases/latest"
+UPDATE_BRANCH = "master"
+REMOTE_VERSION_URL = f"https://raw.githubusercontent.com/mfxa48792/bw-cms-uploader/{UPDATE_BRANCH}/VERSION"
+REMOTE_ZIP_URL = f"https://github.com/mfxa48792/bw-cms-uploader/archive/refs/heads/{UPDATE_BRANCH}.zip"
 
 # 更新時不覆蓋的本地資料
 EXCLUDE = {
@@ -26,10 +27,10 @@ def _read_local_version() -> str | None:
         return f.read().strip()
 
 
-def _http_get_json(url: str, timeout: int = 10) -> dict:
+def _http_get_text(url: str, timeout: int = 10) -> str:
     req = urllib.request.Request(url, headers=REQUEST_HEADERS)
     with urllib.request.urlopen(req, timeout=timeout) as resp:
-        return json.load(resp)
+        return resp.read().decode("utf-8")
 
 
 def _download(url: str, dest_path: str, timeout: int = 60):
@@ -39,25 +40,21 @@ def _download(url: str, dest_path: str, timeout: int = 60):
 
 
 def check_for_updates():
-    """檢查並自動更新程式（GitHub Releases，僅用標準函式庫，不需git/requests）。
-    若有新版本，下載並覆蓋程式檔案後重新啟動。
+    """檢查並自動更新程式（直接比對 GitHub 上的 VERSION 檔，僅用標準函式庫）。
+    若有新版本，下載分支zip並覆蓋程式檔案後重新啟動。
     """
     try:
         local_version = _read_local_version()
 
         try:
-            data = _http_get_json(RELEASES_API)
+            remote_version = _http_get_text(REMOTE_VERSION_URL).strip()
         except urllib.error.HTTPError as e:
-            if e.code == 404:
-                print("[版本檢查] 尚無發布版本，略過")
-            else:
-                print(f"[版本檢查] 更新檢查失敗（HTTP {e.code}），略過")
+            print(f"[版本檢查] 更新檢查失敗（HTTP {e.code}），略過")
             return
         except urllib.error.URLError as e:
             print(f"[版本檢查] 無法連線更新伺服器，略過：{e.reason}")
             return
 
-        remote_version = data.get("tag_name")
         if not remote_version:
             print("[版本檢查] 找不到版本資訊，略過")
             return
@@ -66,22 +63,17 @@ def check_for_updates():
             print(f"[版本檢查] 已是最新版本（{remote_version}）")
             return
 
-        zip_url = data.get("zipball_url")
-        if not zip_url:
-            print("[版本檢查] 找不到下載連結，略過")
-            return
-
         print(f"[版本檢查] 發現新版本，正在更新（{local_version or '未知版本'} → {remote_version}）...")
 
         with tempfile.TemporaryDirectory() as tmpdir:
             zip_path = os.path.join(tmpdir, "update.zip")
-            _download(zip_url, zip_path)
+            _download(REMOTE_ZIP_URL, zip_path)
 
             extract_dir = os.path.join(tmpdir, "extracted")
             with zipfile.ZipFile(zip_path) as zf:
                 zf.extractall(extract_dir)
 
-            # GitHub zipball 內只有一層根資料夾
+            # GitHub分支zip 內只有一層根資料夾
             root_items = os.listdir(extract_dir)
             if len(root_items) != 1:
                 print("[版本檢查] 更新檔案結構異常，略過")
