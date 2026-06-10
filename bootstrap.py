@@ -47,7 +47,11 @@ def check_playwright_browser():
 
 
 def run():
-    print("=== 環境檢查 ===\n")
+    print("=== 版本檢查 ===")
+    from src.updater import check_for_updates
+    check_for_updates()
+
+    print("\n=== 環境檢查 ===\n")
     check_python_version()
     check_packages()
     check_playwright_browser()
