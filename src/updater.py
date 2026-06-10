@@ -1,95 +1,106 @@
+import json
 import os
-import subprocess
+import shutil
 import sys
+import tempfile
+import urllib.error
+import urllib.request
+import zipfile
 
-GIT_TIMEOUT = 10
+VERSION_FILE = "VERSION"
+RELEASES_API = "https://api.github.com/repos/mfxa48792/bw-cms-uploader/releases/latest"
 
-UPDATE_REPO = "https://github.com/mfxa48792/bw-cms-uploader.git"
+# 更新時不覆蓋的本地資料
+EXCLUDE = {
+    "config.json", "logs", "done", "temp", "inbox", "progress.json",
+    ".git", "__pycache__",
+}
 
-# 不參與自動更新的本地分支（開發用）
-DEV_BRANCHES = {"develop", "main", "master"}
-
-
-def _run(args, timeout=GIT_TIMEOUT):
-    return subprocess.run(
-        args,
-        capture_output=True,
-        text=True,
-        timeout=timeout,
-        encoding="utf-8",
-        errors="replace",
-    )
+REQUEST_HEADERS = {"User-Agent": "cms-uploader-updater"}
 
 
-def _latest_remote_tag() -> str | None:
-    """取得遠端最新的 tag 名稱（依版本排序）。"""
-    result = _run(["git", "ls-remote", "--tags", "--sort=-v:refname", UPDATE_REPO])
-    if result.returncode != 0:
+def _read_local_version() -> str | None:
+    if not os.path.exists(VERSION_FILE):
         return None
-    for line in result.stdout.splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        ref = line.split()[1]
-        name = ref.replace("refs/tags/", "")
-        if name.endswith("^{}"):
-            name = name[:-3]
-        return name
-    return None
+    with open(VERSION_FILE, encoding="utf-8") as f:
+        return f.read().strip()
+
+
+def _http_get_json(url: str, timeout: int = 10) -> dict:
+    req = urllib.request.Request(url, headers=REQUEST_HEADERS)
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        return json.load(resp)
+
+
+def _download(url: str, dest_path: str, timeout: int = 60):
+    req = urllib.request.Request(url, headers=REQUEST_HEADERS)
+    with urllib.request.urlopen(req, timeout=timeout) as resp, open(dest_path, "wb") as f:
+        shutil.copyfileobj(resp, f)
 
 
 def check_for_updates():
-    """檢查並自動更新程式（依最新 tag，來源為公開的 GitHub repo）。
-    若有更新且更新成功，會 checkout 最新 tag 並重新啟動程式。
+    """檢查並自動更新程式（GitHub Releases，僅用標準函式庫，不需git/requests）。
+    若有新版本，下載並覆蓋程式檔案後重新啟動。
     """
     try:
-        is_repo = _run(["git", "rev-parse", "--is-inside-work-tree"])
-        if is_repo.returncode != 0 or is_repo.stdout.strip() != "true":
-            print("[版本檢查] 非 git 安裝，略過自動更新")
+        local_version = _read_local_version()
+
+        try:
+            data = _http_get_json(RELEASES_API)
+        except urllib.error.HTTPError as e:
+            if e.code == 404:
+                print("[版本檢查] 尚無發布版本，略過")
+            else:
+                print(f"[版本檢查] 更新檢查失敗（HTTP {e.code}），略過")
+            return
+        except urllib.error.URLError as e:
+            print(f"[版本檢查] 無法連線更新伺服器，略過：{e.reason}")
             return
 
-        branch = _run(["git", "rev-parse", "--abbrev-ref", "HEAD"]).stdout.strip()
-        if branch in DEV_BRANCHES:
-            print(f"[版本檢查] 目前在開發分支（{branch}），略過自動更新")
+        remote_version = data.get("tag_name")
+        if not remote_version:
+            print("[版本檢查] 找不到版本資訊，略過")
             return
 
-        latest_tag = _latest_remote_tag()
-        if not latest_tag:
-            print("[版本檢查] 無法連線更新伺服器或尚無發布版本，略過")
+        if local_version == remote_version:
+            print(f"[版本檢查] 已是最新版本（{remote_version}）")
             return
 
-        # 本地目前所在的 tag（若不在任何 tag 上則為 None）
-        local_tag_result = _run(["git", "describe", "--tags", "--exact-match", "HEAD"])
-        local_tag = local_tag_result.stdout.strip() if local_tag_result.returncode == 0 else None
-
-        if local_tag == latest_tag:
-            print(f"[版本檢查] 已是最新版本（{latest_tag}）")
+        zip_url = data.get("zipball_url")
+        if not zip_url:
+            print("[版本檢查] 找不到下載連結，略過")
             return
 
-        # 本地有未提交變更時，不強行更新，避免覆蓋使用者修改（僅檢查本資料夾）
-        status = _run(["git", "status", "--porcelain", "."]).stdout.strip()
-        if status:
-            print("[版本檢查] 偵測到本地有未提交的變更，略過自動更新")
-            return
+        print(f"[版本檢查] 發現新版本，正在更新（{local_version or '未知版本'} → {remote_version}）...")
 
-        print(f"[版本檢查] 發現新版本，正在更新（{local_tag or '未知版本'} → {latest_tag}）...")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            zip_path = os.path.join(tmpdir, "update.zip")
+            _download(zip_url, zip_path)
 
-        fetch = _run(["git", "fetch", "--quiet", "--tags", UPDATE_REPO], timeout=60)
-        if fetch.returncode != 0:
-            print(f"[版本檢查] 自動更新失敗，將使用目前版本：{fetch.stderr.strip()}")
-            return
+            extract_dir = os.path.join(tmpdir, "extracted")
+            with zipfile.ZipFile(zip_path) as zf:
+                zf.extractall(extract_dir)
 
-        checkout = _run(["git", "checkout", "--quiet", f"tags/{latest_tag}"], timeout=30)
-        if checkout.returncode != 0:
-            print(f"[版本檢查] 自動更新失敗，將使用目前版本：{checkout.stderr.strip()}")
-            return
+            # GitHub zipball 內只有一層根資料夾
+            root_items = os.listdir(extract_dir)
+            if len(root_items) != 1:
+                print("[版本檢查] 更新檔案結構異常，略過")
+                return
+            src_root = os.path.join(extract_dir, root_items[0])
+
+            for name in os.listdir(src_root):
+                if name in EXCLUDE:
+                    continue
+                src_path = os.path.join(src_root, name)
+                dst_path = os.path.join(".", name)
+                if os.path.isdir(dst_path):
+                    shutil.rmtree(dst_path)
+                elif os.path.exists(dst_path):
+                    os.remove(dst_path)
+                shutil.move(src_path, dst_path)
 
         print("[版本檢查] 更新完成，重新啟動程式...\n")
         os.execv(sys.executable, [sys.executable] + sys.argv)
 
-    except subprocess.TimeoutExpired:
-        print("[版本檢查] 連線逾時，略過更新")
-    except FileNotFoundError:
-        print("[版本檢查] 未偵測到 git，略過更新")
     except Exception as e:
         print(f"[版本檢查] 更新檢查發生錯誤，略過：{e}")
