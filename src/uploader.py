@@ -255,23 +255,36 @@ class Uploader:
     def _txt_to_html(self, txt: str) -> str:
         """將 txt 內容轉換為 HTML。
         ## 標題 → <h2>標題</h2>
+        連續以 > 開頭的行 → 合併為一個抽言 <blockquote class="blockquote">，行間以 <br> 連接
         一般行 → <p>行內容</p>（每行各自一個 <p>，空白行忽略）
         已替換的 <img> 標籤直接保留為 <p><img ...></p>
         """
         lines = txt.splitlines()
         html_parts = []
+        quote_buffer = []
+
+        def flush_quote():
+            if quote_buffer:
+                html_parts.append(f'<blockquote class="blockquote">{"<br>".join(quote_buffer)}</blockquote>')
+                quote_buffer.clear()
 
         for line in lines:
             stripped = line.strip().strip("\r")
             if not stripped:
+                flush_quote()
                 continue
-            elif stripped.startswith("##"):
+            if stripped.startswith(">"):
+                quote_buffer.append(stripped[1:].strip())
+                continue
+            flush_quote()
+            if stripped.startswith("##"):
                 html_parts.append(f"<h2>{stripped.lstrip('#').strip()}</h2>")
             elif stripped.startswith("<img"):
                 html_parts.append(f"<p>{stripped}</p>")
             else:
                 html_parts.append(f"<p>{stripped}</p>")
 
+        flush_quote()
         return "\n".join(html_parts)
 
     # ── 結尾清理 ─────────────────────────────────────────────
