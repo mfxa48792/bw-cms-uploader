@@ -1,3 +1,4 @@
+import getpass
 import json
 import os
 from src.logger import logger
@@ -32,7 +33,7 @@ def ensure_config() -> dict:
         if not config.get("username"):
             config["username"] = input("帳號：").strip()
         if not config.get("password"):
-            config["password"] = input("密碼：").strip()
+            config["password"] = getpass.getpass("密碼：").strip()
 
         with open(CONFIG_PATH, "w", encoding="utf-8") as f:
             json.dump(config, f, ensure_ascii=False, indent=2)

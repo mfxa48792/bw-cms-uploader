@@ -1,3 +1,4 @@
+import getpass
 import json
 import os
 from playwright.sync_api import sync_playwright, Page, Browser as PWBrowser
@@ -77,7 +78,7 @@ class Browser:
     def _prompt_new_credentials(self):
         logger.info("請重新輸入帳號密碼：")
         self.config["username"] = input("帳號：").strip()
-        self.config["password"] = input("密碼：").strip()
+        self.config["password"] = getpass.getpass("密碼：").strip()
         with open(CONFIG_PATH, "w", encoding="utf-8") as f:
             json.dump(self.config, f, ensure_ascii=False, indent=2)
         logger.info("已更新設定\n")
