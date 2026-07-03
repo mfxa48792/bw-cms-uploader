@@ -194,6 +194,7 @@ class Uploader:
             cms_id = self.browser.upload_box(
                 title=box_item.get("title", ""),
                 content_html=content_html,
+                category=box_item.get("category", ""),
             )
 
             box_item["cms_id"] = cms_id

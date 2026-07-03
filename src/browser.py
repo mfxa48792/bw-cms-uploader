@@ -7,6 +7,12 @@ from src.logger import logger
 CONFIG_PATH = "config.json"
 
 
+def _summary_to_html(summary: str) -> str:
+    """Summary 欄位：以 \\n 切割，每段一個 <p>，空行略過。"""
+    parts = [line.strip() for line in summary.splitlines() if line.strip()]
+    return "\n".join(f"<p>{p}</p>" for p in parts)
+
+
 class Browser:
     def __init__(self, config: dict):
         self.config = config
@@ -186,7 +192,7 @@ class Browser:
             next_btn.click()
             self.page.wait_for_load_state("domcontentloaded")
 
-    def upload_box(self, title: str, content_html: str) -> str:
+    def upload_box(self, title: str, content_html: str, category: str = "") -> str:
         logger.debug(f"上傳BOX：{title!r}")
         self._goto("Box/Index")
         self._click("#btn_Add")
@@ -196,6 +202,11 @@ class Browser:
         logger.debug(f"BOX GUID = {guid}")
 
         self._fill("#BoxName", title)
+        if category:
+            try:
+                self._select("#CSSTypeId", label=category)
+            except Exception:
+                logger.debug(f"CSSTypeId 找不到對應選項：{category!r}，略過")
         logger.debug(f"evaluate Content (長度 {len(content_html)})")
         self.page.evaluate(f'document.getElementById("Content").value = {json.dumps(content_html)}')
 
@@ -247,6 +258,11 @@ class Browser:
         ).locator("input[name='ChannelId']").first
         if not radio.is_checked():
             radio.check()
+
+        summary_html = _summary_to_html(field.get("Summary", ""))
+        if summary_html:
+            logger.debug(f"evaluate Summary (長度 {len(summary_html)})")
+            self.page.evaluate(f'document.getElementById("Summary").value = {json.dumps(summary_html)}')
 
         logger.debug(f"evaluate Content (長度 {len(content_html)})")
         self.page.evaluate(f'document.getElementById("Content").value = {json.dumps(content_html)}')
