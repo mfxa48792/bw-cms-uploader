@@ -8,9 +8,14 @@ CONFIG_PATH = "config.json"
 
 
 def _summary_to_html(summary: str) -> str:
-    """Summary 欄位：以 \\n 切割，每段一個 <p>，空行略過。"""
+    """Summary/Lead/ExtendedReading 欄位：以 \\n 切割，每段一個 <p>，空行略過。**文字** → <strong>文字</strong>。"""
+    import re
     parts = [line.strip() for line in summary.splitlines() if line.strip()]
-    return "\n".join(f"<p>{p}</p>" for p in parts)
+    result = []
+    for p in parts:
+        p = re.sub(r'\*\*(.+?)\*\*', r'<strong>\1</strong>', p)
+        result.append(f"<p>{p}</p>")
+    return "\n".join(result)
 
 
 class Browser:
