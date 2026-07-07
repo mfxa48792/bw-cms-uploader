@@ -279,7 +279,9 @@ class Uploader:
                 continue
             flush_quote()
             if stripped.startswith("##"):
-                html_parts.append(f"<h2>{stripped.lstrip('#').strip()}</h2>")
+                heading = stripped.lstrip('#').strip()
+                inner = "<br>".join(part.strip() for part in heading.split("|"))
+                html_parts.append(f"<h2>{inner}</h2>")
             elif stripped.startswith("<img"):
                 html_parts.append(f"<p>{stripped}</p>")
             else:

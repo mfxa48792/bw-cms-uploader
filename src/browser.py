@@ -259,10 +259,11 @@ class Browser:
         if not radio.is_checked():
             radio.check()
 
-        summary_html = _summary_to_html(field.get("Summary", ""))
-        if summary_html:
-            logger.debug(f"evaluate Summary (長度 {len(summary_html)})")
-            self.page.evaluate(f'document.getElementById("Summary").value = {json.dumps(summary_html)}')
+        for field_key, elem_id in [("Summary", "Summary"), ("Lead", "Description"), ("ExtendedReading", "ExtendContent")]:
+            html = _summary_to_html(field.get(field_key, ""))
+            if html:
+                logger.debug(f"evaluate {elem_id} (長度 {len(html)})")
+                self.page.evaluate(f'document.getElementById("{elem_id}").value = {json.dumps(html)}')
 
         logger.debug(f"evaluate Content (長度 {len(content_html)})")
         self.page.evaluate(f'document.getElementById("Content").value = {json.dumps(content_html)}')
