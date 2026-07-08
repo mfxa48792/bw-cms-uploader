@@ -173,13 +173,14 @@ class Browser:
             row.locator(".Author").fill(author_value)
 
         cms_id = row.locator(".SourceId").input_value()
+        cms_guid = row.locator("a.del_btn").get_attribute("id")
         img_url = row.locator("img").get_attribute("src")
 
         logger.debug(f"click .btn_Store")
         self.page.locator("a.icon_btn.btn_Store").click()
-        logger.debug(f"圖片儲存完成 SourceId={cms_id} ImgName={img_name}")
+        logger.debug(f"圖片儲存完成 SourceId={cms_id} GUID={cms_guid} ImgName={img_name}")
 
-        return cms_id, img_url
+        return cms_id, cms_guid, img_url
 
     def _find_gallery_row(self, img_name: str):
         """在 Gallery/Index 翻頁尋找 img_name 對應的列。"""
@@ -225,7 +226,7 @@ class Browser:
 
         return cms_id
 
-    def create_article(self, field: dict, issue: str, content_html: str, channel: str) -> str:
+    def create_article(self, field: dict, issue: str, content_html: str, channel: str, gallery_guid: str = None) -> str:
         logger.debug(f"建立文章：{field.get('Title', '')!r}")
         self._goto("CTMagazine/Index")
         self._click("#btn_Add")
@@ -269,6 +270,11 @@ class Browser:
             if html:
                 logger.debug(f"evaluate {elem_id} (長度 {len(html)})")
                 self.page.evaluate(f'document.getElementById("{elem_id}").value = {json.dumps(html)}')
+
+        if gallery_guid:
+            logger.debug(f"set GalleryId = {gallery_guid}")
+            self.page.evaluate(f'document.getElementById("GalleryId").value = {json.dumps(gallery_guid)}')
+            self.page.locator("input[name='HasImgGroup'][value='R']").check()
 
         logger.debug(f"evaluate Content (長度 {len(content_html)})")
         self.page.evaluate(f'document.getElementById("Content").value = {json.dumps(content_html)}')

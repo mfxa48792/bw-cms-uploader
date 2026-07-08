@@ -104,7 +104,7 @@ class Uploader:
                 continue
 
             img_name = img_name_map[img_item["file"]]
-            cms_id, _ = self.browser.fill_image_row(
+            cms_id, cms_guid, _ = self.browser.fill_image_row(
                 img_name=img_name,
                 title=img_item.get("title", ""),
                 desc=img_item.get("desc", ""),
@@ -113,6 +113,7 @@ class Uploader:
             )
 
             img_item["cms_id"] = cms_id
+            img_item["cms_guid"] = cms_guid
             self._save_meta(article["ds_img"]["dir"], article["ds_img"]["meta"])
 
             article["article_txt"] = self._replace_placeholder(
@@ -157,7 +158,7 @@ class Uploader:
                 if img_item.get("cms_id"):
                     continue
                 img_name = box_img_name_map[img_item["file"]]
-                cms_id, img_url = self.browser.fill_image_row(
+                cms_id, cms_guid, img_url = self.browser.fill_image_row(
                     img_name=img_name,
                     title=img_item.get("title", ""),
                     desc=img_item.get("desc", ""),
@@ -165,6 +166,7 @@ class Uploader:
                     author_value=img_item.get("author_value", ""),
                 )
                 img_item["cms_id"] = cms_id
+                img_item["cms_guid"] = cms_guid
                 self._save_meta(article["ds_box"]["img"]["dir"], article["ds_box"]["img"]["meta"])
 
                 img_tag = f'<img src="{img_url}">'
@@ -214,11 +216,21 @@ class Uploader:
         content_html = self._txt_to_html(article.get("article_txt") or "")
         channel = self.browser.config.get("default_channel", "財經")
 
+        # 解析 image_index → cms_guid
+        gallery_guid = None
+        image_index = field.get("image_index", "")
+        if image_index:
+            ds_img_meta = article.get("ds_img", {}).get("meta") or []
+            matched = next((m for m in ds_img_meta if m.get("file") == image_index), None)
+            if matched:
+                gallery_guid = matched.get("cms_guid")
+
         guid = self.browser.create_article(
             field=field,
             issue=self.issue,
             content_html=content_html,
             channel=channel,
+            gallery_guid=gallery_guid,
         )
 
         edit_url = self.browser._url(f"CTMagazine/Edit/{guid}")
