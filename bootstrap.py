@@ -6,6 +6,7 @@ MIN_PYTHON = (3, 10)
 REQUIRED_PACKAGES = [
     ("playwright", "playwright"),
     ("requests", "requests"),
+    ("PIL", "Pillow"),
 ]
 
 

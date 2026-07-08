@@ -273,8 +273,17 @@ class Browser:
 
         if gallery_guid:
             logger.debug(f"set GalleryId = {gallery_guid}")
-            self.page.evaluate(f'document.getElementById("GalleryId").value = {json.dumps(gallery_guid)}')
             self.page.locator("input[name='HasImgGroup'][value='R']").check()
+            self.page.evaluate(f'''
+                (function() {{
+                    var el = document.getElementById("GalleryId");
+                    var setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set;
+                    setter.call(el, {json.dumps(gallery_guid)});
+                    var overlay = document.getElementById("div_RelateGallery");
+                    if (overlay) overlay.style.display = "none";
+                }})();
+            ''')
+            logger.debug(f"GalleryId 驗證：{self.page.evaluate('document.getElementById(\"GalleryId\").value')!r}")
 
         logger.debug(f"evaluate Content (長度 {len(content_html)})")
         self.page.evaluate(f'document.getElementById("Content").value = {json.dumps(content_html)}')

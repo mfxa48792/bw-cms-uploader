@@ -1,4 +1,5 @@
 import csv
+import io
 import json
 import os
 import re
@@ -81,7 +82,7 @@ class Uploader:
             futures = {
                 executor.submit(
                     self.browser.post_image_file,
-                    os.path.join(article["ds_img"]["dir"], item["file"]),
+                    self._prepare_image(os.path.join(article["ds_img"]["dir"], item["file"])),
                     site_id,
                     cookies,
                 ): item for item in pending
@@ -140,7 +141,7 @@ class Uploader:
                 futures = {
                     executor.submit(
                         self.browser.post_image_file,
-                        os.path.join(article["ds_box"]["img"]["dir"], item["file"]),
+                        self._prepare_image(os.path.join(article["ds_box"]["img"]["dir"], item["file"])),
                         site_id,
                         cookies,
                     ): item for item in pending_box_img
@@ -218,12 +219,13 @@ class Uploader:
 
         # 解析 image_index → cms_guid
         gallery_guid = None
-        image_index = field.get("image_index", "")
+        image_index = field.get("image_index") or ""
         if image_index:
             ds_img_meta = article.get("ds_img", {}).get("meta") or []
             matched = next((m for m in ds_img_meta if m.get("file") == image_index), None)
             if matched:
                 gallery_guid = matched.get("cms_guid")
+        logger.debug(f"主圖設定：image_index={image_index!r} → gallery_guid={gallery_guid!r}")
 
         guid = self.browser.create_article(
             field=field,
@@ -301,6 +303,57 @@ class Uploader:
 
         flush_quote()
         return "\n".join(html_parts)
+
+    # ── 圖片壓縮 ─────────────────────────────────────────────
+
+    def _prepare_image(self, img_path: str) -> str:
+        """若圖片超過 3MB，壓縮後存至 temp/ 並回傳新路徑；否則回傳原路徑。"""
+        limit = 3000 * 1024
+        if os.path.getsize(img_path) <= limit:
+            return img_path
+
+        from PIL import Image
+        ext = os.path.splitext(img_path)[1].lower()
+        save_format = "JPEG" if ext in (".jpg", ".jpeg") else "PNG"
+        out_path = os.path.join(TEMP_DIR, "compressed_" + os.path.basename(img_path))
+        os.makedirs(TEMP_DIR, exist_ok=True)
+
+        img = Image.open(img_path).convert("RGB") if save_format == "JPEG" else Image.open(img_path)
+
+        if save_format == "JPEG":
+            for quality in range(85, 20, -10):
+                buf = io.BytesIO()
+                img.save(buf, format="JPEG", quality=quality, optimize=True)
+                if buf.tell() <= limit:
+                    with open(out_path, "wb") as f:
+                        f.write(buf.getvalue())
+                    logger.debug(f"圖片壓縮：{os.path.basename(img_path)} quality={quality} → {buf.tell() // 1024}KB")
+                    return out_path
+        else:
+            buf = io.BytesIO()
+            img.save(buf, format="PNG", optimize=True)
+            if buf.tell() <= limit:
+                with open(out_path, "wb") as f:
+                    f.write(buf.getvalue())
+                logger.debug(f"圖片壓縮（PNG optimize）：{os.path.basename(img_path)} → {buf.tell() // 1024}KB")
+                return out_path
+
+        # 仍超過則縮小尺寸
+        scale = 0.9
+        while scale > 0.3:
+            w, h = img.size
+            resized = img.resize((int(w * scale), int(h * scale)), Image.LANCZOS)
+            buf = io.BytesIO()
+            resized.save(buf, format=save_format, optimize=True)
+            if buf.tell() <= limit:
+                with open(out_path, "wb") as f:
+                    f.write(buf.getvalue())
+                logger.debug(f"圖片縮小：{os.path.basename(img_path)} scale={scale:.1f} → {buf.tell() // 1024}KB")
+                return out_path
+            scale -= 0.1
+
+        logger.debug(f"圖片壓縮失敗，使用原檔：{img_path}")
+        return img_path
 
     # ── 結尾清理 ─────────────────────────────────────────────
 
