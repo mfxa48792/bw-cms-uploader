@@ -288,8 +288,9 @@ class Browser:
         logger.debug(f"evaluate Content (長度 {len(content_html)})")
         self.page.evaluate(f'document.getElementById("Content").value = {json.dumps(content_html)}')
 
-        self._click("a.submit_btn.gray")
-        self.page.wait_for_load_state("domcontentloaded")
+        logger.debug("click submit_btn")
+        self.page.locator("a.submit_btn.gray").click(timeout=120000)
+        self.page.wait_for_load_state("domcontentloaded", timeout=120000)
 
         self._goto(f"CTMagazine/Edit/{guid}")
         cms_id = self.page.locator(".row:has(label:text('序號代碼'))").inner_text()

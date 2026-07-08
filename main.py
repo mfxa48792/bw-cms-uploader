@@ -1,4 +1,6 @@
+import os
 import sys
+from glob import glob
 from src.logger import logger
 from src.setup import ensure_config
 from src.zip_handler import select_zip
@@ -27,19 +29,30 @@ def main():
     if not browser.verify_magazine(issue):
         return browser, config
 
-    # 5. 選擇 ZIP 並解壓縮
-    articles, zip_path = select_zip()
-    if not articles:
-        logger.info("沒有找到可上傳的文章，程式結束。")
-        return browser, config
+    # 5. 逐批處理 ZIP（可連續作業）
+    while True:
+        articles, zip_path = select_zip()
+        if not articles:
+            logger.info("沒有找到可上傳的文章，程式結束。")
+            break
 
-    # 6. 斷點續傳確認
-    tracker = ProgressTracker(total=len(articles))
-    tracker.check_resume()
+        # 6. 斷點續傳確認
+        tracker = ProgressTracker(total=len(articles))
+        tracker.check_resume()
 
-    # 7. 逐篇上稿
-    uploader = Uploader(browser, tracker, articles, issue=issue, zip_path=zip_path)
-    uploader.run()
+        # 7. 逐篇上稿
+        uploader = Uploader(browser, tracker, articles, issue=issue, zip_path=zip_path)
+        uploader.run()
+
+        logger.info("\n=== 本批完成 ===")
+
+        # 8. 若 inbox/ 還有 ZIP 才詢問是否繼續
+        remaining = glob(os.path.join("inbox", "*.zip"))
+        if not remaining:
+            break
+        ans = input(f"\ninbox/ 還有 {len(remaining)} 個 ZIP，繼續上傳嗎？(y/n)：").strip().lower()
+        if ans != "y":
+            break
 
     logger.info("\n=== 全部完成 ===")
     return browser, config
