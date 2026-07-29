@@ -45,7 +45,28 @@ class Browser:
     def _select(self, selector: str, **kwargs):
         label = kwargs.get("label", kwargs.get("value", ""))
         logger.debug(f"select {selector} = {label!r}")
-        self.page.select_option(selector, **kwargs)
+        try:
+            self.page.select_option(selector, **kwargs, timeout=3000)
+        except Exception:
+            options = self.page.eval_on_selector_all(
+                f"{selector} option",
+                "els => els.map(e => e.textContent.trim()).filter(t => t)"
+            )
+            if not options:
+                raise
+            print(f"\n找不到選項 {label!r}，請手動選擇：")
+            for i, opt in enumerate(options, 1):
+                print(f"  {i}. {opt}")
+            while True:
+                try:
+                    idx = int(input("輸入編號：")) - 1
+                    if 0 <= idx < len(options):
+                        self.page.select_option(selector, label=options[idx])
+                        logger.debug(f"手動選擇 {selector} = {options[idx]!r}")
+                        break
+                except ValueError:
+                    pass
+                print("請輸入有效的編號")
 
     def _radio(self, name: str, label: str):
         logger.debug(f"radio {name} = {label!r}")
@@ -95,11 +116,25 @@ class Browser:
         logger.info("已更新設定\n")
 
     def verify_magazine(self, issue: str) -> bool:
-        logger.info(f"驗證期數 {issue}...")
+        MAGAZINE_OPTIONS = {
+            "1": "商業周刊",
+            "2": "alive",
+        }
+        print("請選擇刊別：")
+        for k, v in MAGAZINE_OPTIONS.items():
+            print(f"  {k}. {v}")
+        while True:
+            choice = input("輸入編號：").strip()
+            if choice in MAGAZINE_OPTIONS:
+                break
+            print("請輸入 1 或 2")
+        magazine_label = MAGAZINE_OPTIONS[choice]
+
+        logger.info(f"驗證期數 {issue}（{magazine_label}）...")
         self._goto("Magazine/Index")
         self.page.wait_for_selector("#SearchVol")
         self._fill("#SearchVol", issue)
-        self._select("#MagazineCategoryId", value="f72fff3a-b774-454a-8b5a-870a114dc675")
+        self._select("#MagazineCategoryId", label=magazine_label)
         self._click("#search_btn")
         self.page.wait_for_selector("p.count")
 
@@ -235,20 +270,36 @@ class Browser:
         guid = self.page.url.rstrip("/").split("/")[-1]
         logger.debug(f"文章 GUID = {guid}")
 
-        self._select("#MagazineMainCategoryId", label=field.get("MagazineMainCategoryId", ""))
+        magazine_main = field.get("MagazineMainCategoryId", "")
+        options = self.page.eval_on_selector_all(
+            "#MagazineMainCategoryId option",
+            "els => els.map(e => e.textContent.trim())"
+        )
+        logger.debug(f"MagazineMainCategoryId options: {options}")
+        matched = next((o for o in options if o.lower() == magazine_main.lower()), magazine_main)
+        self._select("#MagazineMainCategoryId", label=matched)
         self.page.wait_for_function("() => document.querySelector('#MagazineId') && document.querySelector('#MagazineId').options.length > 1")
         self.page.wait_for_function("() => document.querySelector('#MagazineCategory_0') && document.querySelector('#MagazineCategory_0').options.length > 1")
 
         self._select("#MagazineId", label=issue)
-        self._fill("#ArticleNo_Page", field.get("ArticleNo_Page", ""))
+        self._fill("#ArticleNo_Page", field.get("ArticleNo_Page") or "000")
 
+        has_sub = False
         category_1 = field.get("MagazineCategory_1", "")
         if category_1:
             self._select("#MagazineCategory_0", label=category_1)
-            self.page.wait_for_function("() => document.querySelector('#MagazineCategory_1') && document.querySelector('#MagazineCategory_1').options.length > 1")
+            try:
+                self.page.wait_for_function(
+                    "() => document.querySelector('#MagazineCategory_1') && document.querySelector('#MagazineCategory_1').options.length > 1",
+                    timeout=5000,
+                )
+                has_sub = True
+            except Exception:
+                has_sub = False
+                logger.debug("無子階層，略過二級分類")
 
         category_0 = field.get("MagazineCategory_0", "")
-        if category_0:
+        if category_0 and (has_sub or not category_1):
             self._select("#MagazineCategory_0", label=category_0)
 
         for field_id in ["Title", "SubTitle", "Producer", "Author", "Classfieder",

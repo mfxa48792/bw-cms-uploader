@@ -119,13 +119,9 @@ def select_zip() -> tuple[list[dict], str] | tuple[None, None]:
                 pass
             print("請輸入有效的編號")
 
-    # 若 temp/ 已存在（斷點續傳）則跳過解壓縮，保留已替換的內容
-    if os.path.exists(TEMP_DIR) and os.listdir(TEMP_DIR):
-        print("偵測到上次未清理的 temp/，跳過解壓縮直接續用\n")
-    else:
-        print("正在解壓縮...")
-        _extract_zip(chosen)
-        print(f"已解壓縮到 temp/\n")
+    print("正在解壓縮...")
+    _extract_zip(chosen)
+    print(f"已解壓縮到 temp/\n")
 
     articles = _parse_articles()
     if not articles:

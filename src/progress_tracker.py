@@ -12,25 +12,7 @@ class ProgressTracker:
         self.articles: dict = {}
 
     def check_resume(self):
-        """若有 progress.json，詢問是否續跑。"""
-        if not os.path.exists(PROGRESS_PATH):
-            return
-
-        with open(PROGRESS_PATH, "r", encoding="utf-8") as f:
-            data = json.load(f)
-
-        art = data.get("current_article", 0)
-        step = data.get("current_step", 0)
-        print(f"偵測到上次未完成的進度：第 {art + 1} 篇 / 第 {step + 1} 步")
-        ans = input("是否從上次繼續？(y/n)：").strip().lower()
-
-        if ans == "y":
-            self.current_article = art
-            self.current_step = step
-            self.articles = data.get("articles", {})
-            print(f"從第 {art + 1} 篇第 {step + 1} 步繼續\n")
-        else:
-            self.reset()
+        pass
 
     def save(self):
         data = {

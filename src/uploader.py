@@ -4,6 +4,8 @@ import json
 import os
 import re
 import shutil
+import sys
+import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from src.browser import Browser
@@ -13,6 +15,25 @@ from src.logger import logger
 INBOX_DIR = "inbox"
 DONE_DIR = "done"
 TEMP_DIR = "temp"
+
+
+class _LineTracker:
+    """多執行緒原地更新每個檔案的狀態行。"""
+    def __init__(self, labels: list[str], prefix: str = ""):
+        self._lock = threading.Lock()
+        self._order = list(labels)
+        self._prefix = prefix
+        for label in self._order:
+            print(f"    {prefix}[{label}] 等待中...")
+
+    def update(self, label: str, text: str):
+        with self._lock:
+            idx = self._order.index(label)
+            total = len(self._order)
+            up = total - idx
+            sys.stdout.write(f"\033[{up}A\r\033[K    {self._prefix}[{label}] {text}")
+            sys.stdout.write(f"\033[{up}B\r")
+            sys.stdout.flush()
 
 
 class Uploader:
@@ -76,33 +97,47 @@ class Uploader:
         # 取得上傳憑證
         site_id, cookies = self.browser.get_gallery_credentials()
 
-        # 並行上傳所有待處理圖片
+        # 並行壓縮 + 上傳所有待處理圖片
         img_name_map = {}  # file → img_name
+
+        tracker = _LineTracker([item["file"] for item in ds_img_meta])
+        for item in ds_img_meta:
+            if item.get("cms_id"):
+                tracker.update(item["file"], "已上傳")
+
+        def _compress_and_upload(item):
+            fname = item["file"]
+            src = os.path.join(article["ds_img"]["dir"], fname)
+            kb = os.path.getsize(src) // 1024
+            if kb > 3000:
+                tracker.update(fname, f"壓縮中（{kb}KB）...")
+            else:
+                tracker.update(fname, "上傳中...")
+            path = self._prepare_image(src)
+            if path != src:
+                tracker.update(fname, f"上傳中（壓縮後 {os.path.getsize(path) // 1024}KB）...")
+            img_name = self.browser.post_image_file(path, site_id, cookies)
+            tracker.update(fname, "上傳完成，等待填資料...")
+            return img_name
+
         with ThreadPoolExecutor() as executor:
             futures = {
-                executor.submit(
-                    self.browser.post_image_file,
-                    self._prepare_image(os.path.join(article["ds_img"]["dir"], item["file"])),
-                    site_id,
-                    cookies,
-                ): item for item in pending
+                executor.submit(_compress_and_upload, item): item for item in pending
             }
             for future in as_completed(futures):
                 item = futures[future]
-                img_name = future.result()
-                img_name_map[item["file"]] = img_name
-                logger.debug(f"上傳完成 {item['file']} → {img_name}")
+                img_name_map[item["file"]] = future.result()
 
         # 一次進 Gallery 頁面逐筆填資料
         self.browser._goto("Gallery/Index")
         self.browser.page.reload(wait_until="domcontentloaded")
 
         for i, img_item in enumerate(ds_img_meta, 1):
-            logger.info(f"    ({i}/{total}) {img_item['file']}")
-
             if img_item.get("cms_id"):
                 logger.debug(f"已跳過（cms_id={img_item['cms_id']}）")
                 continue
+
+            tracker.update(img_item["file"], "填資料中...")
 
             img_name = img_name_map[img_item["file"]]
             cms_id, cms_guid, _ = self.browser.fill_image_row(
@@ -122,6 +157,9 @@ class Uploader:
             )
             logger.debug(f"替換佔位符 {{{img_item['file']}}} → {{DS_IMG_{cms_id}}}")
             self._save_txt(os.path.join(article["path"], "article.txt"), article["article_txt"])
+            tracker.update(img_item["file"], f"完成（ID: {cms_id}）")
+
+        print()
 
     # ── 第二步：DS_BOX ───────────────────────────────────────
 
@@ -137,19 +175,31 @@ class Uploader:
             site_id, cookies = self.browser.get_gallery_credentials()
 
             box_img_name_map = {}
+            box_tracker = _LineTracker([item["file"] for item in pending_box_img], prefix="BOX/")
+
+            def _compress_and_upload_box(item):
+                fname = item["file"]
+                src = os.path.join(article["ds_box"]["img"]["dir"], fname)
+                kb = os.path.getsize(src) // 1024
+                if kb > 3000:
+                    box_tracker.update(fname, f"壓縮中（{kb}KB）...")
+                else:
+                    box_tracker.update(fname, "上傳中...")
+                path = self._prepare_image(src)
+                if path != src:
+                    box_tracker.update(fname, f"上傳中（壓縮後 {os.path.getsize(path) // 1024}KB）...")
+                img_name = self.browser.post_image_file(path, site_id, cookies)
+                box_tracker.update(fname, "完成")
+                return img_name
+
             with ThreadPoolExecutor() as executor:
                 futures = {
-                    executor.submit(
-                        self.browser.post_image_file,
-                        self._prepare_image(os.path.join(article["ds_box"]["img"]["dir"], item["file"])),
-                        site_id,
-                        cookies,
-                    ): item for item in pending_box_img
+                    executor.submit(_compress_and_upload_box, item): item for item in pending_box_img
                 }
                 for future in as_completed(futures):
                     item = futures[future]
-                    img_name = future.result()
-                    box_img_name_map[item["file"]] = img_name
+                    box_img_name_map[item["file"]] = future.result()
+            print()
 
             # 一次進 Gallery 填資料
             self.browser._goto("Gallery/Index")
@@ -270,6 +320,7 @@ class Uploader:
     def _txt_to_html(self, txt: str) -> str:
         """將 txt 內容轉換為 HTML。
         ## 標題 → <h2>標題</h2>
+        @@ 文末連結 → <p><b>文字1<br>文字2<br><a href="網址" target="_blank" rel="nofollow">網址</a></b></p>
         連續以 > 開頭的行 → 合併為一個抽言 <blockquote class="blockquote">，行間以 <br> 連接
         一般行 → <p>行內容</p>（每行各自一個 <p>，空白行忽略）
         已替換的 <img> 標籤直接保留為 <p><img ...></p>
@@ -296,6 +347,14 @@ class Uploader:
                 heading = stripped.lstrip('#').strip()
                 inner = "<br>".join(part.strip() for part in heading.split("|"))
                 html_parts.append(f"<h2>{inner}</h2>")
+            elif stripped.startswith("@@"):
+                parts = [p.strip() for p in stripped.lstrip("@").strip().split("|")]
+                if parts[-1].startswith(("http://", "https://")):
+                    url = parts[-1]
+                    text_lines = parts[:-1]
+                    parts = text_lines + [f'<a href="{url}" target="_blank" rel="nofollow">{url}</a>']
+                inner = "<br>".join(parts)
+                html_parts.append(f"<p><b>{inner}</b></p>")
             elif stripped.startswith("<img"):
                 html_parts.append(f"<p>{stripped}</p>")
             else:
