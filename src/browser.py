@@ -48,25 +48,28 @@ class Browser:
         try:
             self.page.select_option(selector, **kwargs, timeout=3000)
         except Exception:
-            options = self.page.eval_on_selector_all(
-                f"{selector} option",
-                "els => els.map(e => e.textContent.trim()).filter(t => t)"
-            )
-            if not options:
-                raise
-            print(f"\n找不到選項 {label!r}，請手動選擇：")
-            for i, opt in enumerate(options, 1):
-                print(f"  {i}. {opt}")
-            while True:
-                try:
-                    idx = int(input("輸入編號：")) - 1
-                    if 0 <= idx < len(options):
-                        self.page.select_option(selector, label=options[idx])
-                        logger.debug(f"手動選擇 {selector} = {options[idx]!r}")
-                        break
-                except ValueError:
-                    pass
-                print("請輸入有效的編號")
+            self._select_manual(selector, reason=f"找不到選項 {label!r}")
+
+    def _select_manual(self, selector: str, reason: str = "請選擇"):
+        options = self.page.eval_on_selector_all(
+            f"{selector} option",
+            "els => els.map(e => e.textContent.trim()).filter(t => t)"
+        )
+        if not options:
+            raise Exception(f"{selector} 沒有可選項目")
+        print(f"\n{reason}，請手動選擇：")
+        for i, opt in enumerate(options, 1):
+            print(f"  {i}. {opt}")
+        while True:
+            try:
+                idx = int(input("輸入編號：")) - 1
+                if 0 <= idx < len(options):
+                    self.page.select_option(selector, label=options[idx])
+                    logger.debug(f"手動選擇 {selector} = {options[idx]!r}")
+                    return options[idx]
+            except ValueError:
+                pass
+            print("請輸入有效的編號")
 
     def _radio(self, name: str, label: str):
         logger.debug(f"radio {name} = {label!r}")
@@ -286,21 +289,25 @@ class Browser:
 
         has_sub = False
         category_1 = field.get("MagazineCategory_1", "")
-        if category_1:
-            self._select("#MagazineCategory_0", label=category_1)
-            try:
-                self.page.wait_for_function(
-                    "() => document.querySelector('#MagazineCategory_1') && document.querySelector('#MagazineCategory_1').options.length > 1",
-                    timeout=5000,
-                )
-                has_sub = True
-            except Exception:
-                has_sub = False
-                logger.debug("無子階層，略過二級分類")
-
         category_0 = field.get("MagazineCategory_0", "")
-        if category_0 and (has_sub or not category_1):
-            self._select("#MagazineCategory_0", label=category_0)
+
+        if not category_1 and not category_0:
+            self._select_manual("#MagazineCategory_0", reason="欄目未填")
+        else:
+            if category_1:
+                self._select("#MagazineCategory_0", label=category_1)
+                try:
+                    self.page.wait_for_function(
+                        "() => document.querySelector('#MagazineCategory_1') && document.querySelector('#MagazineCategory_1').options.length > 1",
+                        timeout=5000,
+                    )
+                    has_sub = True
+                except Exception:
+                    has_sub = False
+                    logger.debug("無子階層，略過二級分類")
+
+            if category_0 and (has_sub or not category_1):
+                self._select("#MagazineCategory_0", label=category_0)
 
         for field_id in ["Title", "SubTitle", "Producer", "Author", "Classfieder",
                          "Interviewer", "Researcher", "Translator"]:
