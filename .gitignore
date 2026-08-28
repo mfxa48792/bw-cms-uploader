@@ -1,9 +1,8 @@
 __pycache__/
 *.pyc
 logs/
-done/
 temp/
-inbox/
 progress.json
 config.json
 /.vs
+/done
