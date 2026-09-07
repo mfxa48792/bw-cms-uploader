@@ -8,7 +8,7 @@ CONFIG_PATH = "config.json"
 
 
 def _summary_to_html(summary: str) -> str:
-    """Summary/Lead/ExtendedReading 欄位：以 \\n 切割，每行一個 <p>；行內以 | 切段，段間以 <br> 連接；**文字** → <b>文字</b>。"""
+    """Summary/Lead 欄位：以 \\n 切割，每行一個 <p>；行內以 | 切段，段間以 <br> 連接；**文字** → <b>文字</b>。"""
     import re
     lines = [line.strip() for line in summary.splitlines() if line.strip()]
     result = []
@@ -16,6 +16,23 @@ def _summary_to_html(summary: str) -> str:
         segments = [re.sub(r'\*\*(.+?)\*\*', r'<b>\1</b>', seg.strip()) for seg in line.split("|")]
         result.append(f"<p>{'<br>'.join(segments)}</p>")
     return "\n".join(result)
+
+
+def _extended_reading_to_html(text: str) -> str:
+    """ExtendedReading 欄位：## 標題 → <h2>，一般行 → <p>，**文字** → <b>文字</b>（段落中間局部加粗）。"""
+    import re
+    html_parts = []
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if stripped.startswith("##"):
+            heading = stripped.lstrip("#").strip()
+            html_parts.append(f"<h2>{heading}</h2>")
+        else:
+            stripped = re.sub(r'\*\*(.+?)\*\*', r'<b>\1</b>', stripped)
+            html_parts.append(f"<p>{stripped}</p>")
+    return "\n".join(html_parts)
 
 
 class Browser:
@@ -323,11 +340,16 @@ class Browser:
         if not radio.is_checked():
             radio.check()
 
-        for field_key, elem_id in [("Summary", "Summary"), ("Lead", "Description"), ("ExtendedReading", "ExtendContent")]:
+        for field_key, elem_id in [("Summary", "Summary"), ("Lead", "Description")]:
             html = _summary_to_html(field.get(field_key, ""))
             if html:
                 logger.debug(f"evaluate {elem_id} (長度 {len(html)})")
                 self.page.evaluate(f'document.getElementById("{elem_id}").value = {json.dumps(html)}')
+
+        extreading_html = _extended_reading_to_html(field.get("ExtendedReading", ""))
+        if extreading_html:
+            logger.debug(f"evaluate ExtendContent (長度 {len(extreading_html)})")
+            self.page.evaluate(f'document.getElementById("ExtendContent").value = {json.dumps(extreading_html)}')
 
         if gallery_guid:
             logger.debug(f"set GalleryId = {gallery_guid}")
