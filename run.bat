@@ -6,6 +6,10 @@ echo ================================
 echo.
 
 cd /d "%~dp0"
-python bootstrap.py || pause && exit /b 1
+python bootstrap.py
+if errorlevel 1 (
+    pause
+    exit /b 1
+)
 python main.py
 pause

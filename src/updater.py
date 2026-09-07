@@ -92,7 +92,11 @@ def check_for_updates():
                 shutil.move(src_path, dst_path)
 
         print("[版本檢查] 更新完成，重新啟動程式...\n")
-        os.execv(sys.executable, [sys.executable] + sys.argv)
+        # Windows 上 os.execv 會提前釋放目前行程、造成呼叫端（run.bat）誤判已結束，
+        # 進而跟後續指令搶 console/stdin，改用 subprocess 同步等待取代。
+        import subprocess
+        result = subprocess.run([sys.executable] + sys.argv)
+        sys.exit(result.returncode)
 
     except Exception as e:
         print(f"[版本檢查] 更新檢查發生錯誤，略過：{e}")
