@@ -8,13 +8,13 @@ CONFIG_PATH = "config.json"
 
 
 def _summary_to_html(summary: str) -> str:
-    """Summary/Lead/ExtendedReading 欄位：以 \\n 切割，每段一個 <p>，空行略過。**文字** → <strong>文字</strong>。"""
+    """Summary/Lead/ExtendedReading 欄位：以 \\n 切割，每行一個 <p>；行內以 | 切段，段間以 <br> 連接；**文字** → <b>文字</b>。"""
     import re
-    parts = [line.strip() for line in summary.splitlines() if line.strip()]
+    lines = [line.strip() for line in summary.splitlines() if line.strip()]
     result = []
-    for p in parts:
-        p = re.sub(r'\*\*(.+?)\*\*', r'<strong>\1</strong>', p)
-        result.append(f"<p>{p}</p>")
+    for line in lines:
+        segments = [re.sub(r'\*\*(.+?)\*\*', r'<b>\1</b>', seg.strip()) for seg in line.split("|")]
+        result.append(f"<p>{'<br>'.join(segments)}</p>")
     return "\n".join(result)
 
 
